@@ -3,7 +3,6 @@ import { config } from "dotenv";
 import express from "express";
 import { randomUUID } from "node:crypto";
 import http from "node:http";
-import OpenAI from "openai";
 import { Server } from "socket.io";
 import {
   createRoomRecord,
@@ -79,7 +78,7 @@ async function getOrCreateRoom(data = {}) {
 }
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, aiConfigured: Boolean(process.env.OPENAI_API_KEY) });
+  res.json({ ok: true, aiConfigured: Boolean(process.env.GEMINI_API_KEY), aiProvider: "gemini" });
 });
 
 app.post("/api/auth/signup", (_req, res) => {
@@ -134,36 +133,19 @@ app.post("/api/feedback/analyze", authOptional, async (req, res) => {
     return res.status(400).json({ error: "No transcript lines were captured." });
   }
 
-  if (!process.env.OPENAI_API_KEY) {
+  if (!process.env.GEMINI_API_KEY) {
     return res.status(400).json({
-      error: "OPENAI_API_KEY is not configured on the server.",
-      fallback: await persistFeedback(req, buildFallbackFeedback(transcript, userName, "OPENAI_API_KEY is not configured on the server.")),
+      error: "GEMINI_API_KEY is not configured on the server.",
+      fallback: await persistFeedback(req, buildFallbackFeedback(transcript, userName, "GEMINI_API_KEY is not configured on the server.")),
     });
   }
 
   try {
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const prompt = transcript
       .map((line) => `${line.speakerName}${line.isYou ? " (target learner)" : ""}: ${line.text}`)
       .join("\n");
 
-    const response = await openai.chat.completions.create({
-      model: process.env.OPENAI_FEEDBACK_MODEL || "gpt-4o-mini",
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are an IELTS speaking examiner and English teacher. Return strict JSON with keys: overallBand, fluencyScore, grammarScore, vocabularyScore, coherenceScore, pronunciationScore, corrections, vocabularySuggestions, summary, nextSteps. corrections items need bad, good, note, category. vocabularySuggestions items need original, better, context, example. Analyze only the target learner.",
-        },
-        {
-          role: "user",
-          content: `Target learner: ${userName}\n\nTranscript:\n${prompt}`,
-        },
-      ],
-    });
-
-    const feedback = JSON.parse(response.choices[0]?.message?.content || "{}");
+    const feedback = await analyzeWithGemini(userName, prompt);
     res.json(await persistFeedback(req, feedback));
   } catch (error) {
     const message = error instanceof Error ? error.message : "AI analysis failed.";
@@ -173,6 +155,43 @@ app.post("/api/feedback/analyze", authOptional, async (req, res) => {
     });
   }
 });
+
+async function analyzeWithGemini(userName, prompt) {
+  const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": process.env.GEMINI_API_KEY,
+    },
+    body: JSON.stringify({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              text:
+                "You are an IELTS speaking examiner and English teacher. Return strict JSON with keys: overallBand, fluencyScore, grammarScore, vocabularyScore, coherenceScore, pronunciationScore, corrections, vocabularySuggestions, summary, nextSteps. corrections items need bad, good, note, category. vocabularySuggestions items need original, better, context, example. Analyze only the target learner.\n\n" +
+                `Target learner: ${userName}\n\nTranscript:\n${prompt}`,
+            },
+          ],
+        },
+      ],
+      generationConfig: {
+        responseMimeType: "application/json",
+      },
+    }),
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error?.message || `Gemini API request failed with status ${response.status}.`);
+  }
+
+  const text = data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("") || "";
+  if (!text) throw new Error("Gemini returned an empty feedback response.");
+  return JSON.parse(text);
+}
 
 io.on("connection", (socket) => {
   socket.on("rooms:list", async () => {
@@ -319,11 +338,11 @@ function buildFallbackFeedback(transcript, userName, reason = "") {
     corrections: [],
     vocabularySuggestions: [],
     summary: quotaIssue
-      ? "Transcript was captured, but OpenAI rejected the request because the API project has no available quota or billing is not active."
+      ? "Transcript was captured, but Gemini rejected the request because the API project has no available quota or billing is not active."
       : `Transcript was captured, but real AI analysis could not run${reason ? `: ${reason}` : "."}`,
     nextSteps: quotaIssue
-      ? ["Open the OpenAI Platform billing page and add billing or credits.", "Retry after the project has available quota."]
-      : ["Check OPENAI_API_KEY and OPENAI_FEEDBACK_MODEL on the backend.", "Speak for at least two minutes before ending a session."],
+      ? ["Open Google AI Studio or Google Cloud billing and make sure the Gemini API project has available quota.", "Retry after the project has available quota."]
+      : ["Check GEMINI_API_KEY and GEMINI_MODEL on the backend.", "Speak for at least two minutes before ending a session."],
   };
 }
 
