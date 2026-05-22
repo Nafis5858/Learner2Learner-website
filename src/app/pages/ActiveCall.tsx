@@ -274,7 +274,7 @@ export default function ActiveCall() {
         corrections: [],
         vocabularySuggestions: [],
         summary: error instanceof Error ? error.message : "AI feedback failed.",
-        nextSteps: ["Check that the backend is running and OPENAI_API_KEY is configured."],
+        nextSteps: ["Check that the backend is running and GEMINI_API_KEY is configured."],
       };
     }
 

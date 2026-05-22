@@ -6,11 +6,12 @@ type SpeechRecognition = EventTarget & {
   continuous: boolean;
   interimResults: boolean;
   lang: string;
+  maxAlternatives?: number;
   start: () => void;
   stop: () => void;
   onresult: ((event: SpeechRecognitionEvent) => void) | null;
   onend: (() => void) | null;
-  onerror: (() => void) | null;
+  onerror: ((event: SpeechRecognitionErrorEvent) => void) | null;
 };
 
 type SpeechRecognitionEvent = {
@@ -19,6 +20,10 @@ type SpeechRecognitionEvent = {
     isFinal: boolean;
     0: { transcript: string };
   }>;
+};
+
+type SpeechRecognitionErrorEvent = {
+  error: string;
 };
 
 export function createSpeechCapture(options: {
@@ -37,9 +42,20 @@ export function createSpeechCapture(options: {
   recognition.continuous = true;
   recognition.interimResults = true;
   recognition.lang = "en-US";
+  recognition.maxAlternatives = 3;
 
   let running = false;
   let lastFinal = "";
+  let restartTimer: number | null = null;
+
+  const startRecognition = () => {
+    if (!running) return;
+    try {
+      recognition.start();
+    } catch {
+      restartTimer = window.setTimeout(startRecognition, 500);
+    }
+  };
 
   recognition.onresult = (event) => {
     for (let i = event.resultIndex; i < event.results.length; i += 1) {
@@ -57,26 +73,23 @@ export function createSpeechCapture(options: {
   };
 
   recognition.onend = () => {
-    if (running) {
-      try {
-        recognition.start();
-      } catch {
-        running = false;
-      }
-    }
+    if (running) restartTimer = window.setTimeout(startRecognition, 250);
   };
 
-  recognition.onerror = () => {
-    running = false;
+  recognition.onerror = (event) => {
+    if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+      running = false;
+    }
   };
 
   return {
     start() {
       running = true;
-      recognition.start();
+      startRecognition();
     },
     stop() {
       running = false;
+      if (restartTimer) window.clearTimeout(restartTimer);
       recognition.stop();
     },
   };

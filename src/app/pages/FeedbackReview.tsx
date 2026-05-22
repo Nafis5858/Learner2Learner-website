@@ -23,7 +23,7 @@ const EMPTY_FEEDBACK: FeedbackResult = {
 export default function FeedbackReview() {
   const navigate = useNavigate();
   const session = getLastSession();
-  const feedback = session?.feedback || EMPTY_FEEDBACK;
+  const feedback = normalizeFeedback(session?.feedback || EMPTY_FEEDBACK);
   const [activeTab, setActiveTab] = useState<Tab>("corrections");
 
   const duration = session?.duration || 0;
@@ -212,6 +212,22 @@ export default function FeedbackReview() {
       </div>
     </div>
   );
+}
+
+function normalizeFeedback(feedback: Partial<FeedbackResult> | null): FeedbackResult {
+  const nextSteps = Array.isArray(feedback?.nextSteps)
+    ? feedback.nextSteps
+    : typeof feedback?.nextSteps === "string"
+      ? feedback.nextSteps.split(/\n+/).map((line) => line.replace(/^[-*\d.)\s]+/, "").trim()).filter(Boolean)
+      : [];
+
+  return {
+    ...EMPTY_FEEDBACK,
+    ...feedback,
+    corrections: Array.isArray(feedback?.corrections) ? feedback.corrections : [],
+    vocabularySuggestions: Array.isArray(feedback?.vocabularySuggestions) ? feedback.vocabularySuggestions : [],
+    nextSteps,
+  };
 }
 
 function Stat({ icon: Icon, color, bg, label, value }: { icon: LucideIcon; color: string; bg: string; label: string; value: string }) {

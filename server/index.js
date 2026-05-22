@@ -145,7 +145,7 @@ app.post("/api/feedback/analyze", authOptional, async (req, res) => {
       .map((line) => `${line.speakerName}${line.isYou ? " (target learner)" : ""}: ${line.text}`)
       .join("\n");
 
-    const feedback = await analyzeWithGemini(userName, prompt);
+    const feedback = normalizeFeedback(await analyzeWithGemini(userName, prompt));
     res.json(await persistFeedback(req, feedback));
   } catch (error) {
     const message = error instanceof Error ? error.message : "AI analysis failed.";
@@ -191,6 +191,43 @@ async function analyzeWithGemini(userName, prompt) {
   const text = data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("") || "";
   if (!text) throw new Error("Gemini returned an empty feedback response.");
   return JSON.parse(text);
+}
+
+function normalizeFeedback(feedback = {}) {
+  return {
+    overallBand: numberOr(feedback.overallBand, 0),
+    fluencyScore: numberOr(feedback.fluencyScore, 0),
+    grammarScore: numberOr(feedback.grammarScore, 0),
+    vocabularyScore: numberOr(feedback.vocabularyScore, 0),
+    coherenceScore: numberOr(feedback.coherenceScore, 0),
+    pronunciationScore: numberOr(feedback.pronunciationScore, 0),
+    corrections: toArray(feedback.corrections).map((item) => ({
+      bad: String(item?.bad || ""),
+      good: String(item?.good || ""),
+      note: String(item?.note || ""),
+      category: item?.category ? String(item.category) : undefined,
+    })).filter((item) => item.bad || item.good || item.note),
+    vocabularySuggestions: toArray(feedback.vocabularySuggestions).map((item) => ({
+      original: String(item?.original || ""),
+      better: String(item?.better || ""),
+      context: String(item?.context || ""),
+      example: String(item?.example || ""),
+    })).filter((item) => item.original || item.better || item.context || item.example),
+    summary: String(feedback.summary || "AI feedback was generated, but no summary was returned."),
+    nextSteps: toArray(feedback.nextSteps).map((step) => typeof step === "string" ? step : String(step?.step || step?.text || step?.title || JSON.stringify(step))),
+  };
+}
+
+function toArray(value) {
+  if (Array.isArray(value)) return value;
+  if (!value) return [];
+  if (typeof value === "string") return value.split(/\n+/).map((line) => line.replace(/^[-*\d.)\s]+/, "").trim()).filter(Boolean);
+  return [value];
+}
+
+function numberOr(value, fallback) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
 }
 
 io.on("connection", (socket) => {
