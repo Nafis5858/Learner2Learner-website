@@ -1,0 +1,21 @@
+node_modules/
+dist/
+
+# Local environment files may contain API keys.
+.env
+.env.local
+.env.*.local
+
+# Local database/runtime state.
+server/data/
+*.db
+*.db-shm
+*.db-wal
+
+# Logs and OS/editor noise.
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
