@@ -79,7 +79,7 @@ async function getOrCreateRoom(data = {}) {
 }
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true });
+  res.json({ ok: true, aiConfigured: Boolean(process.env.OPENAI_API_KEY) });
 });
 
 app.post("/api/auth/signup", (_req, res) => {
@@ -137,7 +137,7 @@ app.post("/api/feedback/analyze", authOptional, async (req, res) => {
   if (!process.env.OPENAI_API_KEY) {
     return res.status(400).json({
       error: "OPENAI_API_KEY is not configured on the server.",
-      fallback: await persistFeedback(req, buildFallbackFeedback(transcript, userName)),
+      fallback: await persistFeedback(req, buildFallbackFeedback(transcript, userName, "OPENAI_API_KEY is not configured on the server.")),
     });
   }
 
@@ -166,9 +166,10 @@ app.post("/api/feedback/analyze", authOptional, async (req, res) => {
     const feedback = JSON.parse(response.choices[0]?.message?.content || "{}");
     res.json(await persistFeedback(req, feedback));
   } catch (error) {
+    const message = error instanceof Error ? error.message : "AI analysis failed.";
     res.status(500).json({
-      error: error instanceof Error ? error.message : "AI analysis failed.",
-      fallback: await persistFeedback(req, buildFallbackFeedback(transcript, userName)),
+      error: message,
+      fallback: await persistFeedback(req, buildFallbackFeedback(transcript, userName, message)),
     });
   }
 });
@@ -302,10 +303,11 @@ async function persistFeedback(req, feedback) {
   return { ...feedback, sessionId: saved.id };
 }
 
-function buildFallbackFeedback(transcript, userName) {
+function buildFallbackFeedback(transcript, userName, reason = "") {
   const ownLines = transcript.filter((line) => line.isYou || line.speakerName === userName);
   const words = ownLines.flatMap((line) => line.text.trim().split(/\s+/)).filter(Boolean);
   const estimatedBand = words.length > 120 ? 6.5 : words.length > 60 ? 6 : 5.5;
+  const quotaIssue = reason.includes("429") || reason.toLowerCase().includes("quota") || reason.toLowerCase().includes("billing");
 
   return {
     overallBand: estimatedBand,
@@ -316,9 +318,12 @@ function buildFallbackFeedback(transcript, userName) {
     pronunciationScore: estimatedBand,
     corrections: [],
     vocabularySuggestions: [],
-    summary:
-      "Transcript was captured, but real AI analysis needs OPENAI_API_KEY on the backend. Add the key and run the full app again for grammar corrections and IELTS scoring.",
-    nextSteps: ["Set OPENAI_API_KEY in your terminal or .env deployment environment.", "Speak for at least two minutes before ending a session."],
+    summary: quotaIssue
+      ? "Transcript was captured, but OpenAI rejected the request because the API project has no available quota or billing is not active."
+      : `Transcript was captured, but real AI analysis could not run${reason ? `: ${reason}` : "."}`,
+    nextSteps: quotaIssue
+      ? ["Open the OpenAI Platform billing page and add billing or credits.", "Retry after the project has available quota."]
+      : ["Check OPENAI_API_KEY and OPENAI_FEEDBACK_MODEL on the backend.", "Speak for at least two minutes before ending a session."],
   };
 }
 

@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { config } from "dotenv";
+import { randomUUID } from "node:crypto";
 
 config({ path: ".env.local" });
 config();
@@ -102,6 +103,21 @@ export async function getRoomById(id) {
 }
 
 export async function savePracticeSession(input, token = "") {
+  if (!input.userId || !token) {
+    return {
+      id: randomUUID(),
+      userId: null,
+      roomId: input.roomId || null,
+      roomName: input.roomName || "Practice Room",
+      topic: input.topic || "Free Talk",
+      duration: Number(input.duration || 0),
+      transcript: input.transcript || [],
+      feedback: input.feedback || {},
+      overallBand: typeof input.feedback?.overallBand === "number" ? input.feedback.overallBand : null,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
   const authed = clientForToken(token);
   const feedback = input.feedback || {};
   const payload = {
