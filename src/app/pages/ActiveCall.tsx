@@ -26,7 +26,7 @@ function formatTime(seconds: number) {
 export default function ActiveCall() {
   const navigate = useNavigate();
   const location = useLocation();
-  const roomId = (location.state as { roomId?: string } | null)?.roomId || "open-daily-life";
+  const roomId = (location.state as { roomId?: string } | null)?.roomId || "00000000-0000-0000-0000-000000000001";
   const user = getUser();
   const socket = useMemo(() => getSocket(), []);
 

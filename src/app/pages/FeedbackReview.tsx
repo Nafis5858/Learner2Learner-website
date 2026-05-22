@@ -201,8 +201,8 @@ export default function FeedbackReview() {
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-accent/10 flex items-center justify-center"><BarChart3 size={18} className="text-accent" /></div>
           <div>
-            <div className="text-sm font-semibold">Real session data is stored in this browser session</div>
-            <div className="text-xs text-muted-foreground">For production, connect this to Supabase or PostgreSQL.</div>
+            <div className="text-sm font-semibold">Real session data is saved to Supabase</div>
+            <div className="text-xs text-muted-foreground">The latest feedback is also kept in this browser for quick review.</div>
           </div>
         </div>
         <button onClick={() => navigate("/find-partner")} className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-primary text-white text-sm font-semibold hover:opacity-90">

@@ -1,5 +1,5 @@
 import cors from "cors";
-import "dotenv/config";
+import { config } from "dotenv";
 import express from "express";
 import { randomUUID } from "node:crypto";
 import http from "node:http";
@@ -7,43 +7,38 @@ import OpenAI from "openai";
 import { Server } from "socket.io";
 import {
   createRoomRecord,
-  createToken,
-  createUser,
   getRoomById,
-  getUserByEmail,
-  getUserByToken,
+  getProfileByToken,
   listPracticeSessions,
   listRooms,
   savePracticeSession,
-  updateUser,
-  verifyPassword,
-} from "./db.js";
+} from "./supabaseStore.js";
+
+config({ path: ".env.local" });
+config();
 
 const app = express();
 const server = http.createServer(app);
 const port = Number(process.env.PORT || 3001);
 const allowedOrigins = new Set([
-  process.env.CLIENT_ORIGIN || "http://127.0.0.1:5173",
+  process.env.CLIENT_ORIGIN || "http://localhost:5173",
   "http://localhost:5173",
   "http://127.0.0.1:5173",
 ]);
 
-app.use(cors({ origin: (origin, callback) => callback(null, !origin || allowedOrigins.has(origin)) }));
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    return callback(null, allowedOrigins.has(origin) ? origin : false);
+  },
+}));
 app.use(express.json({ limit: "1mb" }));
 
 const io = new Server(server, {
   cors: { origin: [...allowedOrigins], methods: ["GET", "POST"] },
 });
 
-const rooms = new Map(listRooms().map((room) => [
-  room.id,
-  {
-    ...room,
-    createdAt: Date.now(),
-    participants: new Map(),
-    transcripts: [],
-  },
-]));
+const rooms = new Map();
 
 function publicRoom(room) {
   return {
@@ -56,10 +51,23 @@ function publicRoom(room) {
   };
 }
 
-function getOrCreateRoom(data = {}) {
+async function hydrateRooms() {
+  const storedRooms = await listRooms();
+  rooms.clear();
+  for (const room of storedRooms) {
+    rooms.set(room.id, {
+      ...room,
+      createdAt: Date.now(),
+      participants: new Map(),
+      transcripts: [],
+    });
+  }
+}
+
+async function getOrCreateRoom(data = {}) {
   const id = data.id || randomUUID();
   if (!rooms.has(id)) {
-    const persisted = getRoomById(id) || createRoomRecord({ ...data, id });
+    const persisted = (await getRoomById(id)) || (await createRoomRecord({ ...data, id }));
     rooms.set(id, {
       ...persisted,
       createdAt: Date.now(),
@@ -74,30 +82,12 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-app.post("/api/auth/signup", (req, res) => {
-  const { name, email, password, country, language, level } = req.body || {};
-  if (!name || !email || !password || !country || !language || !level) {
-    return res.status(400).json({ error: "Missing required signup fields." });
-  }
-  if (password.length < 6) {
-    return res.status(400).json({ error: "Password must be at least 6 characters." });
-  }
-  if (getUserByEmail(email)) {
-    return res.status(409).json({ error: "An account with this email already exists." });
-  }
-  const user = createUser({ name, email, password, country, language, level });
-  const token = createToken(user.id);
-  res.status(201).json({ user, token });
+app.post("/api/auth/signup", (_req, res) => {
+  res.status(410).json({ error: "Auth is handled by Supabase Auth in the browser." });
 });
 
-app.post("/api/auth/login", (req, res) => {
-  const { email, password } = req.body || {};
-  const row = email ? getUserByEmail(email) : null;
-  if (!row || !verifyPassword(password || "", row.password_hash)) {
-    return res.status(401).json({ error: "Invalid email or password." });
-  }
-  const token = createToken(row.id);
-  res.json({ user: getUserByToken(token), token });
+app.post("/api/auth/login", (_req, res) => {
+  res.status(410).json({ error: "Auth is handled by Supabase Auth in the browser." });
 });
 
 app.get("/api/auth/me", authOptional, (req, res) => {
@@ -105,24 +95,35 @@ app.get("/api/auth/me", authOptional, (req, res) => {
   res.json({ user: req.user });
 });
 
-app.patch("/api/users/me", authRequired, (req, res) => {
-  const updated = updateUser(req.user.id, req.body || {});
-  res.json({ user: updated });
+app.patch("/api/users/me", (_req, res) => {
+  res.status(410).json({ error: "Profile updates are handled by Supabase in the browser." });
 });
 
-app.get("/api/users/me/sessions", authRequired, (req, res) => {
-  res.json(listPracticeSessions(req.user.id));
+app.get("/api/users/me/sessions", authRequired, async (req, res, next) => {
+  try {
+    res.json(await listPracticeSessions(req.user.id, req.accessToken));
+  } catch (error) {
+    next(error);
+  }
 });
 
-app.get("/api/rooms", (_req, res) => {
-  res.json(mergedRooms());
+app.get("/api/rooms", async (_req, res, next) => {
+  try {
+    res.json(await mergedRooms());
+  } catch (error) {
+    next(error);
+  }
 });
 
-app.post("/api/rooms", authOptional, (req, res) => {
-  const persisted = createRoomRecord(req.body || {}, req.user?.id || null);
-  const room = getOrCreateRoom(persisted);
-  Object.assign(room, persisted);
-  res.status(201).json(publicRoom(room));
+app.post("/api/rooms", authRequired, async (req, res, next) => {
+  try {
+    const persisted = await createRoomRecord(req.body || {}, req.user.id, req.accessToken);
+    const room = await getOrCreateRoom(persisted);
+    Object.assign(room, persisted);
+    res.status(201).json(publicRoom(room));
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post("/api/feedback/analyze", authOptional, async (req, res) => {
@@ -136,7 +137,7 @@ app.post("/api/feedback/analyze", authOptional, async (req, res) => {
   if (!process.env.OPENAI_API_KEY) {
     return res.status(400).json({
       error: "OPENAI_API_KEY is not configured on the server.",
-      fallback: persistFeedback(req, buildFallbackFeedback(transcript, userName)),
+      fallback: await persistFeedback(req, buildFallbackFeedback(transcript, userName)),
     });
   }
 
@@ -163,29 +164,33 @@ app.post("/api/feedback/analyze", authOptional, async (req, res) => {
     });
 
     const feedback = JSON.parse(response.choices[0]?.message?.content || "{}");
-    res.json(persistFeedback(req, feedback));
+    res.json(await persistFeedback(req, feedback));
   } catch (error) {
     res.status(500).json({
       error: error instanceof Error ? error.message : "AI analysis failed.",
-      fallback: persistFeedback(req, buildFallbackFeedback(transcript, userName)),
+      fallback: await persistFeedback(req, buildFallbackFeedback(transcript, userName)),
     });
   }
 });
 
 io.on("connection", (socket) => {
-  socket.on("rooms:list", () => {
-    socket.emit("rooms:update", [...rooms.values()].map(publicRoom));
+  socket.on("rooms:list", async () => {
+    socket.emit("rooms:update", await mergedRooms());
   });
 
-  socket.on("room:create", (payload, callback) => {
-    const persisted = createRoomRecord(payload || {});
-    const room = getOrCreateRoom(persisted);
-    io.emit("rooms:update", mergedRooms());
-    callback?.(publicRoom(room));
+  socket.on("room:create", async (payload, callback) => {
+    try {
+      const persisted = await createRoomRecord(payload || {});
+      const room = await getOrCreateRoom(persisted);
+      io.emit("rooms:update", await mergedRooms());
+      callback?.(publicRoom(room));
+    } catch (error) {
+      callback?.({ error: error instanceof Error ? error.message : "Could not create room." });
+    }
   });
 
-  socket.on("room:join", ({ roomId, user }) => {
-    const room = getOrCreateRoom({ id: roomId });
+  socket.on("room:join", async ({ roomId, user }) => {
+    const room = await getOrCreateRoom({ id: roomId });
     const participant = {
       id: user.id,
       name: user.name,
@@ -207,7 +212,7 @@ io.on("connection", (socket) => {
 
     socket.emit("room:peers", existingPeers);
     socket.to(room.id).emit("room:participant-joined", publicParticipant(participant));
-    io.emit("rooms:update", mergedRooms());
+    io.emit("rooms:update", await mergedRooms());
   });
 
   socket.on("signal:offer", ({ to, description }) => emitToUser(to, "signal:offer", { from: socket.data.userId, description }));
@@ -220,7 +225,7 @@ io.on("connection", (socket) => {
     if (!room || !participant) return;
     participant.isMuted = Boolean(muted);
     io.to(room.id).emit("room:participants", publicRoom(room).participants);
-    io.emit("rooms:update", mergedRooms());
+    mergedRooms().then((next) => io.emit("rooms:update", next)).catch(() => undefined);
   });
 
   socket.on("transcript:add", (line) => {
@@ -252,34 +257,40 @@ function leaveRoom(socket) {
   if (!room || !socket.data.userId) return;
   room.participants.delete(socket.data.userId);
   socket.to(room.id).emit("room:participant-left", { id: socket.data.userId });
-  io.emit("rooms:update", mergedRooms());
+  mergedRooms().then((next) => io.emit("rooms:update", next)).catch(() => undefined);
   socket.data.roomId = null;
   socket.data.userId = null;
 }
 
-function mergedRooms() {
-  return listRooms().map((stored) => {
+async function mergedRooms() {
+  return (await listRooms()).map((stored) => {
     const live = rooms.get(stored.id);
     return live ? publicRoom({ ...live, ...stored, participants: live.participants }) : stored;
   });
 }
 
-function authOptional(req, _res, next) {
+async function authOptional(req, _res, next) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  req.user = getUserByToken(token);
-  next();
+  req.accessToken = token;
+  try {
+    req.user = await getProfileByToken(token);
+    next();
+  } catch (error) {
+    next(error);
+  }
 }
 
 function authRequired(req, res, next) {
-  authOptional(req, res, () => {
+  authOptional(req, res, (error) => {
+    if (error) return next(error);
     if (!req.user) return res.status(401).json({ error: "Authentication required." });
     next();
   });
 }
 
-function persistFeedback(req, feedback) {
-  const saved = savePracticeSession({
+async function persistFeedback(req, feedback) {
+  const saved = await savePracticeSession({
     userId: req.user?.id || null,
     roomId: req.body?.roomId || null,
     roomName: req.body?.roomName || "Practice Room",
@@ -287,7 +298,7 @@ function persistFeedback(req, feedback) {
     duration: req.body?.duration || 0,
     transcript: req.body?.transcript || [],
     feedback,
-  });
+  }, req.accessToken);
   return { ...feedback, sessionId: saved.id };
 }
 
@@ -311,6 +322,17 @@ function buildFallbackFeedback(transcript, userName) {
   };
 }
 
-server.listen(port, () => {
-  console.log(`Learner2Learner server running on http://127.0.0.1:${port}`);
+app.use((error, _req, res, _next) => {
+  res.status(500).json({ error: error instanceof Error ? error.message : "Server error." });
 });
+
+hydrateRooms()
+  .then(() => {
+    server.listen(port, () => {
+      console.log(`Learner2Learner server running on http://localhost:${port}`);
+    });
+  })
+  .catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });

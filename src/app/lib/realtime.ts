@@ -32,7 +32,7 @@ let socket: Socket | null = null;
 
 export function getSocket() {
   if (!socket) {
-    socket = io(import.meta.env.VITE_SOCKET_URL || "http://127.0.0.1:3001", {
+    socket = io(import.meta.env.VITE_SOCKET_URL || "http://localhost:3001", {
       transports: ["websocket", "polling"],
     });
   }
@@ -80,7 +80,7 @@ export async function analyzeFeedback(input: {
 }
 
 function apiBase() {
-  return import.meta.env.VITE_API_URL || "http://127.0.0.1:3001";
+  return import.meta.env.VITE_API_URL || "http://localhost:3001";
 }
 
 function authHeaders() {
